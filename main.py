@@ -129,11 +129,17 @@ async def upload_to_file_search_store(file_path: Path, store_name: str, display_
             print(f"Failed to ensure store '{store_name}' exists")
             return False
 
-        # Upload file to file search store
-        # Note: Not using display_name in config to avoid encoding issues with Chinese characters
+        # Upload to file search store
+        # store_name should be the file search store name (e.g., user_xxx or group_xxx)
+        # display_name is the custom display name for the file (used in citations)
+        config_dict = {}
+        if display_name:
+            config_dict['display_name'] = display_name
+
         operation = client.file_search_stores.upload_to_file_search_store(
             file_search_store_name=store_name,
-            file=str(file_path)
+            file=str(file_path),
+            config=config_dict if config_dict else None
         )
 
         # Wait for operation to complete (with timeout)
