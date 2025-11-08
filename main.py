@@ -163,6 +163,7 @@ async def list_documents_in_store(store_name: str) -> list:
                         'create_time': str(getattr(doc, 'create_time', '')),
                         'update_time': str(getattr(doc, 'update_time', ''))
                     })
+                    print(f"Use SDK list function: File found in store '{store_name}': {doc.name}")
             else:
                 # Fallback to REST API
                 import requests
@@ -181,6 +182,7 @@ async def list_documents_in_store(store_name: str) -> list:
                         'create_time': doc.get('createTime', ''),
                         'update_time': doc.get('updateTime', '')
                     })
+                    print(f"Use REST API list function: File found in store '{store_name}': {doc.name}")
 
         except Exception as e:
             print(f"Error with SDK, trying REST API: {e}")
@@ -201,6 +203,7 @@ async def list_documents_in_store(store_name: str) -> list:
                     'create_time': doc.get('createTime', ''),
                     'update_time': doc.get('updateTime', '')
                 })
+                print(f"Use REST API list function: File found in store '{store_name}': {doc.name}")
 
         print(f"Found {len(documents)} documents in store '{store_name}'")
         return documents
