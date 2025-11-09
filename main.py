@@ -10,7 +10,7 @@ from typing import Optional
 from linebot.models import (
     MessageEvent, TextSendMessage, FileMessage, ImageMessage,
     PostbackEvent, TemplateSendMessage, CarouselTemplate, CarouselColumn,
-    PostbackAction
+    PostbackAction, QuickReply, QuickReplyButton, MessageAction
 )
 from linebot.exceptions import InvalidSignatureError
 from linebot.aiohttp_async_http_client import AiohttpAsyncHttpClient
@@ -444,8 +444,16 @@ async def handle_document_message(event: MessageEvent, message: FileMessage):
         print(f"Error deleting file: {e}")
 
     if success:
+        # Create Quick Reply buttons for common actions
+        quick_reply = QuickReply(items=[
+            QuickReplyButton(action=MessageAction(label="📝 生成檔案摘要", text="請幫我生成這個檔案的摘要")),
+            QuickReplyButton(action=MessageAction(label="📌 重點整理", text="請幫我整理這個檔案的重點")),
+            QuickReplyButton(action=MessageAction(label="📋 列出檔案", text="列出檔案")),
+        ])
+
         success_msg = TextSendMessage(
-            text=f"✅ 檔案已成功上傳！\n檔案名稱：{file_name}\n\n現在您可以詢問我關於這個檔案的任何問題。"
+            text=f"✅ 檔案已成功上傳！\n檔案名稱：{file_name}\n\n現在您可以詢問我關於這個檔案的任何問題。",
+            quick_reply=quick_reply
         )
         await line_bot_api.push_message(event.source.user_id, success_msg)
     else:
