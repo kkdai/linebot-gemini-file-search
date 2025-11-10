@@ -3,7 +3,7 @@ Tools for File Manager Agent.
 """
 
 from google import genai
-from google.adk.common import types
+from google.genai import types
 import os
 import requests
 

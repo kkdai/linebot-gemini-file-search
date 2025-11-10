@@ -5,8 +5,8 @@ Provides conversational interface for managing files.
 
 import os
 from google import genai
-from google.adk.common import types
-from google.adk.runners.runner import Runner
+from google.adk.agents import Agent
+from google.adk.runners import InMemoryRunner
 
 from .tools import list_files_tool, LIST_FILES_DECLARATION
 
@@ -32,7 +32,7 @@ class FileManagerAgent:
         self.client = genai.Client(api_key=GOOGLE_API_KEY, vertexai=False)
 
         # Define the agent configuration
-        self.agent_config = types.AgentConfig(
+        self.agent = Agent(
             name="file_manager",
             model="gemini-2.5-flash",
             description="檔案管理助手，幫助使用者查看和管理已上傳的文件。",
@@ -48,11 +48,10 @@ class FileManagerAgent:
 
 回應時請用繁體中文。""",
             tools=[LIST_FILES_DECLARATION],
-            tool_model="gemini-2.5-flash",
         )
 
         # Create runner
-        self.runner = Runner(client=self.client, agent=self.agent_config)
+        self.runner = InMemoryRunner(agent=self.agent, app_name="file_manager")
 
     async def handle_list_files(self) -> str:
         """
