@@ -59,10 +59,11 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 # Model configuration
 MODEL_NAME = "gemini-2.5-flash"
 
-def get_store_name(event: MessageEvent) -> str:
+def get_store_name(event) -> str:
     """
-    Get the file search store name based on the message source.
+    Get the file search store name based on the event source.
     Returns user_id for 1-on-1 chat, group_id for group chat.
+    Works with both MessageEvent and PostbackEvent.
     """
     if event.source.type == "user":
         return f"user_{event.source.user_id}"
@@ -92,20 +93,44 @@ def is_bot_mentioned(event: MessageEvent) -> bool:
     Check if the bot is mentioned in a group/room message.
     Returns True for 1-on-1 chat, or if bot is mentioned in group/room.
     """
+    print(f"[DEBUG] is_bot_mentioned called")
+    print(f"[DEBUG] event.source.type: {event.source.type}")
+
     # In 1-on-1 chat, always respond
     if event.source.type == "user":
+        print(f"[DEBUG] 1-on-1 chat detected, returning True")
         return True
 
     # In group/room, check if bot is mentioned
-    if hasattr(event.message, 'mention') and event.message.mention:
-        mentionees = event.message.mention.mentionees
-        for mentionee in mentionees:
-            # Check if this mention is for the bot
-            if (hasattr(mentionee, 'isSelf') and mentionee.isSelf) or \
-               (hasattr(mentionee, 'type') and mentionee.type == "user" and
-                hasattr(mentionee, 'isSelf') and mentionee.isSelf):
-                return True
+    print(f"[DEBUG] Group/room chat detected")
+    print(f"[DEBUG] hasattr(event.message, 'mention'): {hasattr(event.message, 'mention')}")
 
+    if hasattr(event.message, 'mention'):
+        print(f"[DEBUG] event.message.mention: {event.message.mention}")
+        if event.message.mention:
+            mentionees = event.message.mention.mentionees
+            print(f"[DEBUG] Number of mentionees: {len(mentionees) if mentionees else 0}")
+
+            if mentionees:
+                for i, mentionee in enumerate(mentionees):
+                    print(f"[DEBUG] Mentionee {i}:")
+                    print(f"[DEBUG]   type: {type(mentionee)}")
+                    print(f"[DEBUG]   hasattr isSelf: {hasattr(mentionee, 'isSelf')}")
+                    if hasattr(mentionee, 'isSelf'):
+                        print(f"[DEBUG]   isSelf value: {mentionee.isSelf}")
+                    print(f"[DEBUG]   hasattr type: {hasattr(mentionee, 'type')}")
+                    if hasattr(mentionee, 'type'):
+                        print(f"[DEBUG]   type value: {mentionee.type}")
+                    print(f"[DEBUG]   hasattr user_id: {hasattr(mentionee, 'user_id')}")
+                    if hasattr(mentionee, 'user_id'):
+                        print(f"[DEBUG]   user_id value: {mentionee.user_id}")
+
+                    # Check if this mention is for the bot
+                    if hasattr(mentionee, 'isSelf') and mentionee.isSelf:
+                        print(f"[DEBUG] Bot mentioned! (isSelf=True)")
+                        return True
+
+    print(f"[DEBUG] Bot not mentioned, returning False")
     return False
 
 
@@ -515,10 +540,21 @@ async def handle_document_message(event: MessageEvent, message: FileMessage):
 
     if success:
         # Create Quick Reply buttons for common actions with specific file name
+        # Using Postback instead of MessageAction for better Group chat support
+        import urllib.parse
         quick_reply = QuickReply(items=[
-            QuickReplyButton(action=MessageAction(label="📝 生成檔案摘要", text=f"請幫我生成「{file_name}」這個檔案的摘要")),
-            QuickReplyButton(action=MessageAction(label="📌 重點整理", text=f"請幫我整理「{file_name}」的重點")),
-            QuickReplyButton(action=MessageAction(label="📋 列出檔案", text="列出檔案")),
+            QuickReplyButton(action=PostbackAction(
+                label="📝 生成檔案摘要",
+                data=f"action=query&prompt={urllib.parse.quote(f'請幫我生成「{file_name}」這個檔案的摘要')}"
+            )),
+            QuickReplyButton(action=PostbackAction(
+                label="📌 重點整理",
+                data=f"action=query&prompt={urllib.parse.quote(f'請幫我整理「{file_name}」的重點')}"
+            )),
+            QuickReplyButton(action=PostbackAction(
+                label="📋 列出檔案",
+                data="action=list_files"
+            )),
         ])
 
         success_msg = TextSendMessage(
@@ -597,60 +633,83 @@ async def send_files_carousel(event: MessageEvent, documents: list):
 
 async def handle_postback(event: PostbackEvent):
     """
-    Handle postback events (e.g., delete file button clicks).
+    Handle postback events from Quick Reply buttons and other interactions.
+    Supports: delete_file, query, list_files, view_citation
     """
     try:
         # Parse postback data
         data = event.postback.data
-        params = dict(param.split('=') for param in data.split('&'))
+        params = dict(param.split('=', 1) for param in data.split('&'))
 
         action = params.get('action')
-        doc_name = params.get('doc_name')
+        print(f"[DEBUG] Postback action: {action}")
 
-        if action == 'delete_file' and doc_name:
-            # Delete the document
-            success = await delete_document(doc_name)
+        # Get store name for operations
+        store_name = get_store_name(event)
 
-            if success:
-                # Extract display name from doc_name for user-friendly message
-                display_name = doc_name.split('/')[-1] if '/' in doc_name else doc_name
+        if action == 'delete_file':
+            # Handle delete file action
+            doc_name = params.get('doc_name')
+            if doc_name:
+                success = await delete_document(doc_name)
 
-                reply_msg = TextSendMessage(
-                    text=f"✅ 檔案已刪除成功！\n\n如需查看剩餘檔案，請輸入「列出檔案」。"
-                )
+                if success:
+                    reply_msg = TextSendMessage(
+                        text=f"✅ 檔案已刪除成功！\n\n如需查看剩餘檔案，請點擊下方按鈕。"
+                    )
+                else:
+                    reply_msg = TextSendMessage(text="❌ 刪除檔案失敗，請稍後再試。")
+
+                await line_bot_api.reply_message(event.reply_token, reply_msg)
+
+        elif action == 'query':
+            # Handle file query from Quick Reply
+            import urllib.parse
+            prompt = urllib.parse.unquote(params.get('prompt', ''))
+            print(f"[DEBUG] Query prompt: {prompt}")
+
+            if prompt:
+                # Query file search
+                response_text, citations = await query_file_search(prompt, store_name)
+
+                # Store citations in cache
+                if citations:
+                    citations_cache[store_name] = citations[:3]
+                    print(f"Stored {len(citations_cache[store_name])} citations for {store_name}")
+
+                # Create Quick Reply buttons for citations
+                quick_reply = None
+                if citations:
+                    quick_reply_items = []
+                    for i, citation in enumerate(citations[:3], 1):
+                        quick_reply_items.append(
+                            QuickReplyButton(action=PostbackAction(
+                                label=f"📖 引用{i}",
+                                data=f"action=view_citation&num={i}"
+                            ))
+                        )
+                    quick_reply = QuickReply(items=quick_reply_items)
+
+                # Reply to user
+                reply_msg = TextSendMessage(text=response_text, quick_reply=quick_reply)
+                await line_bot_api.reply_message(event.reply_token, reply_msg)
             else:
-                reply_msg = TextSendMessage(text="❌ 刪除檔案失敗，請稍後再試。")
+                reply_msg = TextSendMessage(text="查詢內容不能為空。")
+                await line_bot_api.reply_message(event.reply_token, reply_msg)
 
+        elif action == 'list_files':
+            # Handle list files request
+            print(f"[DEBUG] List files for store: {store_name}")
+            agent = FileManagerAgent(store_name, store_name_cache)
+            response_text = await agent.handle_list_files()
+            reply_msg = TextSendMessage(text=response_text)
             await line_bot_api.reply_message(event.reply_token, reply_msg)
-        else:
-            print(f"Unknown postback action: {action}")
 
-    except Exception as e:
-        print(f"Error handling postback: {e}")
-        error_msg = TextSendMessage(text="處理操作時發生錯誤。")
-        await line_bot_api.reply_message(event.reply_token, error_msg)
+        elif action == 'view_citation':
+            # Handle view citation request
+            citation_num = int(params.get('num', 0))
+            print(f"[DEBUG] View citation {citation_num} for store: {store_name}")
 
-
-async def handle_text_message(event: MessageEvent, message):
-    """
-    Handle text messages - query the file search store or list files.
-    Only responds in groups if bot is mentioned.
-    """
-    # In group/room, only respond if bot is mentioned
-    if not is_bot_mentioned(event):
-        print(f"Bot not mentioned in group/room, skipping response")
-        return
-
-    store_name = get_store_name(event)
-    query = message.text
-
-    print(f"Received query: {query} for store: {store_name}")
-
-    # Check if user wants to view a citation
-    if query.startswith("📖 引用"):
-        # Extract citation number
-        try:
-            citation_num = int(query.replace("📖 引用", "").strip())
             if store_name in citations_cache and 0 < citation_num <= len(citations_cache[store_name]):
                 citation = citations_cache[store_name][citation_num - 1]
 
@@ -670,13 +729,40 @@ async def handle_text_message(event: MessageEvent, message):
 
                 reply_msg = TextSendMessage(text=citation_text)
                 await line_bot_api.reply_message(event.reply_token, reply_msg)
-                return
             else:
                 reply_msg = TextSendMessage(text="找不到此引用，請重新查詢。")
                 await line_bot_api.reply_message(event.reply_token, reply_msg)
-                return
-        except ValueError:
-            pass  # Not a valid citation request, continue normal processing
+
+        else:
+            print(f"Unknown postback action: {action}")
+            reply_msg = TextSendMessage(text="未知的操作。")
+            await line_bot_api.reply_message(event.reply_token, reply_msg)
+
+    except Exception as e:
+        print(f"Error handling postback: {e}")
+        import traceback
+        traceback.print_exc()
+        error_msg = TextSendMessage(text="處理操作時發生錯誤。")
+        await line_bot_api.reply_message(event.reply_token, error_msg)
+
+
+async def handle_text_message(event: MessageEvent, message):
+    """
+    Handle text messages - query the file search store or list files.
+    Only responds in groups if bot is mentioned.
+    """
+    # In group/room, only respond if bot is mentioned
+    if not is_bot_mentioned(event):
+        print(f"Bot not mentioned in group/room, skipping response")
+        return
+
+    store_name = get_store_name(event)
+    query = message.text
+
+    print(f"Received query: {query} for store: {store_name}")
+
+    # Note: Citation viewing is now handled by Postback actions
+    # The Quick Reply buttons trigger postback events instead of text messages
 
     # Check if user wants to list files
     if is_list_files_intent(query):
@@ -696,14 +782,15 @@ async def handle_text_message(event: MessageEvent, message):
         print(f"Stored {len(citations_cache[store_name])} citations for {store_name}")
 
     # Create Quick Reply buttons for citations
+    # Using Postback instead of MessageAction for better Group chat support
     quick_reply = None
     if citations:
         quick_reply_items = []
         for i, citation in enumerate(citations[:3], 1):  # Limit to 3 citations
             quick_reply_items.append(
-                QuickReplyButton(action=MessageAction(
+                QuickReplyButton(action=PostbackAction(
                     label=f"📖 引用{i}",
-                    text=f"📖 引用{i}"
+                    data=f"action=view_citation&num={i}"
                 ))
             )
         quick_reply = QuickReply(items=quick_reply_items)
@@ -721,12 +808,19 @@ async def handle_callback(request: Request):
     body = await request.body()
     body = body.decode()
 
+    # Log webhook body for debugging
+    print("[DEBUG] ===== Webhook Request =====")
+    print(f"[DEBUG] Body: {body}")
+    print("[DEBUG] ===========================")
+
     try:
         events = parser.parse(body, signature)
     except InvalidSignatureError:
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     for event in events:
+        print(f"[DEBUG] Event type: {type(event).__name__}")
+        print(f"[DEBUG] Event source type: {event.source.type if hasattr(event, 'source') else 'N/A'}")
         # Handle PostbackEvent (e.g., delete file button clicks)
         if isinstance(event, PostbackEvent):
             await handle_postback(event)
