@@ -91,12 +91,16 @@ def get_reply_target(event: MessageEvent) -> str:
         return event.source.user_id
 
 
-def is_bot_mentioned(event: MessageEvent) -> bool:
+def is_bot_mentioned(event: MessageEvent, bot_user_id: str) -> bool:
     """
     Check if the bot is mentioned in a group/room message.
     Returns True for 1-on-1 chat, or if bot is mentioned in group/room.
+
+    Args:
+        event: MessageEvent from LINE webhook
+        bot_user_id: Bot's user ID (from webhook body's 'destination' field)
     """
-    print(f"[DEBUG] is_bot_mentioned called")
+    print(f"[DEBUG] is_bot_mentioned called, bot_user_id: {bot_user_id}")
     print(f"[DEBUG] event.source.type: {event.source.type}")
 
     # In 1-on-1 chat, always respond
@@ -118,20 +122,15 @@ def is_bot_mentioned(event: MessageEvent) -> bool:
                 for i, mentionee in enumerate(mentionees):
                     print(f"[DEBUG] Mentionee {i}:")
                     print(f"[DEBUG]   type: {type(mentionee)}")
-                    print(f"[DEBUG]   hasattr isSelf: {hasattr(mentionee, 'isSelf')}")
-                    if hasattr(mentionee, 'isSelf'):
-                        print(f"[DEBUG]   isSelf value: {mentionee.isSelf}")
-                    print(f"[DEBUG]   hasattr type: {hasattr(mentionee, 'type')}")
-                    if hasattr(mentionee, 'type'):
-                        print(f"[DEBUG]   type value: {mentionee.type}")
                     print(f"[DEBUG]   hasattr user_id: {hasattr(mentionee, 'user_id')}")
                     if hasattr(mentionee, 'user_id'):
                         print(f"[DEBUG]   user_id value: {mentionee.user_id}")
+                        print(f"[DEBUG]   Comparing with bot_user_id: {bot_user_id}")
 
-                    # Check if this mention is for the bot
-                    # Use 'is True' for strict boolean comparison (防止字串 "false" 被誤判為 truthy)
-                    if hasattr(mentionee, 'isSelf') and mentionee.isSelf is True:
-                        print(f"[DEBUG] Bot mentioned! (isSelf=True)")
+                    # Check if this mention is for the bot by comparing user_id
+                    # LINE SDK's Mentionee doesn't have isSelf attribute, so we compare user_id directly
+                    if hasattr(mentionee, 'user_id') and mentionee.user_id == bot_user_id:
+                        print(f"[DEBUG] Bot mentioned! (user_id matches)")
                         return True
 
     print(f"[DEBUG] Bot not mentioned, returning False")
@@ -913,13 +912,18 @@ async def handle_postback(event: PostbackEvent):
         await line_bot_api.reply_message(event.reply_token, error_msg)
 
 
-async def handle_text_message(event: MessageEvent, message):
+async def handle_text_message(event: MessageEvent, message, bot_user_id: str = ''):
     """
     Handle text messages - query the file search store or list files.
     Only responds in groups if bot is mentioned.
+
+    Args:
+        event: MessageEvent from LINE webhook
+        message: Message object
+        bot_user_id: Bot's user ID for mention checking
     """
     # In group/room, only respond if bot is mentioned
-    if not is_bot_mentioned(event):
+    if not is_bot_mentioned(event, bot_user_id):
         print(f"Bot not mentioned in group/room, skipping response")
         return
 
@@ -981,6 +985,16 @@ async def handle_callback(request: Request):
     print(f"[DEBUG] Body: {body}")
     print("[DEBUG] ===========================")
 
+    # Parse body to get bot user ID (destination)
+    import json
+    try:
+        body_json = json.loads(body)
+        bot_user_id = body_json.get('destination', '')
+        print(f"[DEBUG] Bot User ID (destination): {bot_user_id}")
+    except json.JSONDecodeError:
+        print("[ERROR] Failed to parse webhook body JSON")
+        bot_user_id = ''
+
     try:
         events = parser.parse(body, signature)
     except InvalidSignatureError:
@@ -995,8 +1009,8 @@ async def handle_callback(request: Request):
         # Handle MessageEvent
         elif isinstance(event, MessageEvent):
             if event.message.type == "text":
-                # Process text message
-                await handle_text_message(event, event.message)
+                # Process text message (pass bot_user_id for mention checking)
+                await handle_text_message(event, event.message, bot_user_id)
             elif event.message.type == "file":
                 # Process file message (upload to file search store)
                 await handle_document_message(event, event.message)
