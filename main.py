@@ -127,7 +127,8 @@ def is_bot_mentioned(event: MessageEvent) -> bool:
                         print(f"[DEBUG]   user_id value: {mentionee.user_id}")
 
                     # Check if this mention is for the bot
-                    if hasattr(mentionee, 'isSelf') and mentionee.isSelf:
+                    # Use 'is True' for strict boolean comparison (防止字串 "false" 被誤判為 truthy)
+                    if hasattr(mentionee, 'isSelf') and mentionee.isSelf is True:
                         print(f"[DEBUG] Bot mentioned! (isSelf=True)")
                         return True
 
