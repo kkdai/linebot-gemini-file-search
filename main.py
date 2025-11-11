@@ -240,10 +240,8 @@ async def list_documents_in_store(store_name: str) -> list:
         print(f"[DEBUG] hasattr(client.file_search_stores, 'documents'): {hasattr(client.file_search_stores, 'documents')}")
         if hasattr(client.file_search_stores, 'documents'):
             print(f"[DEBUG] Using SDK method to list documents")
-            doc_list = list(client.file_search_stores.documents.list(parent=actual_store_name))
-            print(f"[DEBUG] SDK returned {len(doc_list)} documents")
-
-            for doc in doc_list:
+            # 直接迭代，不要用 list() 包裝以避免參數傳遞問題
+            for doc in client.file_search_stores.documents.list(parent=actual_store_name):
                 documents.append({
                     'name': doc.name,
                     'display_name': getattr(doc, 'display_name', 'Unknown'),
@@ -251,6 +249,7 @@ async def list_documents_in_store(store_name: str) -> list:
                     'update_time': str(getattr(doc, 'update_time', ''))
                 })
                 print(f"[DEBUG] Use SDK list function: File found in store '{store_name}': {doc.name}")
+            print(f"[DEBUG] SDK returned {len(documents)} documents")
         else:
             # Fallback to REST API
             print(f"[DEBUG] Using REST API fallback to list documents")
@@ -609,25 +608,37 @@ def is_list_files_intent(text: str) -> bool:
     return any(keyword in text_lower for keyword in list_keywords)
 
 
-async def send_files_carousel(event, documents: list):
+async def send_files_carousel(event, documents: list, page: int = 1, store_name: str = ""):
     """
-    Send files as LINE Flex Message Carousel.
+    Send files as LINE Flex Message Carousel with pagination.
     Works with both MessageEvent and PostbackEvent.
 
     Args:
         event: MessageEvent or PostbackEvent with reply_token
         documents: List of document dicts with 'name', 'display_name', 'create_time'
+        page: Current page number (1-indexed)
+        store_name: Store name for pagination postback actions
     """
     if not documents:
         no_files_msg = TextSendMessage(text="📁 目前沒有任何文件。\n\n請先上傳文件檔案，就可以查詢囉！")
         await line_bot_api.reply_message(event.reply_token, no_files_msg)
         return
 
-    # LINE Flex Carousel 限制最多 10 個 bubble
-    documents = documents[:10]
+    # 分頁設定：每頁最多 11 個檔案，第 12 個位置留給分頁控制
+    page_size = 11
+    total_docs = len(documents)
+    total_pages = (total_docs + page_size - 1) // page_size  # 向上取整
+
+    # 計算當前頁的檔案範圍
+    start_idx = (page - 1) * page_size
+    end_idx = min(start_idx + page_size, total_docs)
+    current_page_docs = documents[start_idx:end_idx]
+
+    print(f"[DEBUG] Pagination: page={page}, total_docs={total_docs}, total_pages={total_pages}")
+    print(f"[DEBUG] Showing documents {start_idx+1} to {end_idx}")
 
     bubbles = []
-    for doc in documents:
+    for doc in current_page_docs:
         # 提取檔名（去除路徑部分）
         display_name = doc.get('display_name', 'Unknown')
         # 格式化時間
@@ -695,12 +706,90 @@ async def send_files_carousel(event, documents: list):
         )
         bubbles.append(bubble)
 
+    # 加入分頁控制 bubble (如果有多頁)
+    if total_pages > 1:
+        # 建立分頁按鈕
+        pagination_buttons = []
+
+        # 上一頁按鈕 (如果不是第一頁)
+        if page > 1:
+            pagination_buttons.append(
+                ButtonComponent(
+                    action=PostbackAction(
+                        label='⬅️ 上一頁',
+                        data=f"action=list_files&page={page-1}&store={urllib.parse.quote(store_name)}"
+                    ),
+                    style='secondary',
+                    color='#95a5a6',
+                    height='sm'
+                )
+            )
+
+        # 下一頁按鈕 (如果不是最後一頁)
+        if page < total_pages:
+            pagination_buttons.append(
+                ButtonComponent(
+                    action=PostbackAction(
+                        label='下一頁 ➡️',
+                        data=f"action=list_files&page={page+1}&store={urllib.parse.quote(store_name)}"
+                    ),
+                    style='primary',
+                    color='#3498db',
+                    height='sm'
+                )
+            )
+
+        # 建立分頁控制 bubble
+        pagination_bubble = BubbleContainer(
+            body=BoxComponent(
+                layout='vertical',
+                contents=[
+                    TextComponent(
+                        text='📄',
+                        size='xxl',
+                        align='center',
+                        margin='md'
+                    ),
+                    TextComponent(
+                        text='頁面導航',
+                        weight='bold',
+                        size='lg',
+                        align='center',
+                        margin='md'
+                    ),
+                    SeparatorComponent(margin='md'),
+                    TextComponent(
+                        text=f'第 {page} / {total_pages} 頁',
+                        size='sm',
+                        color='#999999',
+                        align='center',
+                        margin='md'
+                    ),
+                    TextComponent(
+                        text=f'共 {total_docs} 個檔案',
+                        size='xs',
+                        color='#999999',
+                        align='center',
+                        margin='sm'
+                    )
+                ],
+                padding_all='lg'
+            ),
+            footer=BoxComponent(
+                layout='vertical',
+                contents=pagination_buttons,
+                spacing='sm',
+                padding_all='sm'
+            )
+        )
+        bubbles.append(pagination_bubble)
+
     # 建立 Carousel Container
     carousel_container = CarouselContainer(contents=bubbles)
 
     # 建立 Flex Message
     flex_message = FlexSendMessage(
-        alt_text=f'📁 找到 {len(documents)} 個文件',
+        alt_text=f'📁 找到 {total_docs} 個文件 (第 {page}/{total_pages} 頁)',
         contents=carousel_container
     )
 
@@ -774,10 +863,14 @@ async def handle_postback(event: PostbackEvent):
 
         elif action == 'list_files':
             # Handle list files request - show carousel with delete buttons
-            print(f"[DEBUG] Postback list_files action for store: {store_name}")
-            documents = await list_documents_in_store(store_name)
+            # Parse pagination parameters
+            page = int(params.get('page', 1))
+            store = urllib.parse.unquote(params.get('store', store_name))
+
+            print(f"[DEBUG] Postback list_files action for store: {store}, page: {page}")
+            documents = await list_documents_in_store(store)
             print(f"[DEBUG] Postback list_documents_in_store returned {len(documents)} documents")
-            await send_files_carousel(event, documents)
+            await send_files_carousel(event, documents, page=page, store_name=store)
 
         elif action == 'view_citation':
             # Handle view citation request
@@ -845,7 +938,7 @@ async def handle_text_message(event: MessageEvent, message):
         # Show files carousel with delete buttons
         documents = await list_documents_in_store(store_name)
         print(f"[DEBUG] list_documents_in_store returned {len(documents)} documents")
-        await send_files_carousel(event, documents)
+        await send_files_carousel(event, documents, page=1, store_name=store_name)
         return
 
     # Otherwise, query file search
