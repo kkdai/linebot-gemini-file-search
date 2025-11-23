@@ -26,6 +26,33 @@ from google.genai import types
 # Configuration
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or ""
 
+# Supported file formats for Google AI File Search API
+# Reference: https://ai.google.dev/gemini-api/docs/file-upload
+SUPPORTED_FILE_EXTENSIONS = {
+    '.pdf', '.txt', '.docx', '.html', '.htm', '.md',
+    '.csv', '.xml', '.rtf'
+}
+
+# File format warnings
+UNSUPPORTED_FORMAT_MESSAGE = """
+⚠️ 檔案格式不支援
+
+您上傳的檔案格式「{extension}」目前不被支援。
+
+✅ 支援的格式：
+• PDF (.pdf)
+• Word 文件 (.docx)
+• 純文字 (.txt)
+• Markdown (.md)
+• HTML (.html, .htm)
+• CSV (.csv)
+• RTF (.rtf)
+
+💡 建議：
+如果您的檔案是 .doc 格式，請先轉換成 .docx 格式後再上傳。
+您可以使用 Microsoft Word 開啟檔案後，選擇「另存新檔」並選擇 .docx 格式。
+"""
+
 # LINE Bot configuration
 channel_secret = os.getenv("ChannelSecret", None)
 channel_access_token = os.getenv("ChannelAccessToken", None)
@@ -158,6 +185,15 @@ async def download_line_content(message_id: str, file_name: str) -> Optional[Pat
     except Exception as e:
         print(f"Error downloading file: {e}")
         return None
+
+
+def is_supported_file_format(file_name: str) -> tuple[bool, str]:
+    """
+    Check if the file format is supported by Google AI File Search API.
+    Returns (is_supported, file_extension).
+    """
+    _, ext = os.path.splitext(file_name.lower())
+    return (ext in SUPPORTED_FILE_EXTENSIONS, ext)
 
 
 async def ensure_file_search_store_exists(store_name: str) -> tuple[bool, str]:
@@ -353,7 +389,14 @@ async def upload_to_file_search_store(file_path: Path, store_name: str, display_
             return False
 
     except Exception as e:
-        print(f"Error uploading to file search store: {e}")
+        error_msg = str(e)
+        print(f"Error uploading to file search store: {error_msg}")
+
+        # Check if it's a file format related error
+        if '500' in error_msg or 'INTERNAL' in error_msg:
+            print(f"[WARNING] Possible unsupported file format or corrupted file: {file_path}")
+            print(f"[INFO] File extension: {file_path.suffix}")
+
         return False
 
 
@@ -527,6 +570,15 @@ async def handle_document_message(event: MessageEvent, message: FileMessage):
     reply_target = get_reply_target(event)
     file_name = message.file_name or "unknown_file"
 
+    # Check file format before processing
+    is_supported, file_ext = is_supported_file_format(file_name)
+    if not is_supported:
+        # Send unsupported format message
+        error_msg = TextSendMessage(text=UNSUPPORTED_FORMAT_MESSAGE.format(extension=file_ext))
+        await line_bot_api.reply_message(event.reply_token, error_msg)
+        print(f"[WARNING] Unsupported file format: {file_name} ({file_ext})")
+        return
+
     # Download file
     reply_msg = TextSendMessage(text="正在處理您的檔案，請稍候...")
     await line_bot_api.reply_message(event.reply_token, reply_msg)
@@ -571,7 +623,22 @@ async def handle_document_message(event: MessageEvent, message: FileMessage):
         )
         await line_bot_api.push_message(reply_target, success_msg)
     else:
-        error_msg = TextSendMessage(text="檔案上傳失敗，請重試。")
+        # Provide more helpful error message
+        error_text = f"""❌ 檔案上傳失敗
+
+檔案名稱：{file_name}
+
+可能的原因：
+1. 檔案格式可能有問題或檔案已損壞
+2. 網路連線問題
+3. 檔案過大
+
+請嘗試：
+• 確認檔案可以正常開啟
+• 如果是 .doc 格式，請轉換成 .docx
+• 稍後重試
+"""
+        error_msg = TextSendMessage(text=error_text)
         await line_bot_api.push_message(reply_target, error_msg)
 
 
