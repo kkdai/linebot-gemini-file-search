@@ -31,7 +31,10 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or ""
 # Reference: https://ai.google.dev/gemini-api/docs/file-upload
 SUPPORTED_FILE_EXTENSIONS = {
     '.pdf', '.txt', '.docx', '.html', '.htm', '.md',
-    '.csv', '.xml', '.rtf', '.doc'  # .doc will be auto-converted to .docx
+    '.csv', '.xml', '.rtf',
+    '.doc',   # .doc will be auto-converted to .docx
+    '.ppt',   # .ppt will be auto-converted to .pptx
+    '.pptx'   # .pptx is natively supported
 }
 
 # File format warnings
@@ -43,6 +46,7 @@ UNSUPPORTED_FORMAT_MESSAGE = """
 ✅ 支援的格式：
 • PDF (.pdf)
 • Word 文件 (.doc, .docx - .doc 會自動轉換)
+• PowerPoint (.ppt, .pptx - .ppt 會自動轉換)
 • 純文字 (.txt)
 • Markdown (.md)
 • HTML (.html, .htm)
@@ -253,6 +257,68 @@ def convert_doc_to_docx(input_path: Path) -> tuple[bool, Path | None, str]:
 
     except subprocess.TimeoutExpired:
         return False, None, "轉換超時（檔案可能太大）"
+    except Exception as e:
+        print(f"[ERROR] Exception during conversion: {e}")
+        return False, None, f"轉換錯誤：{str(e)}"
+
+
+def convert_ppt_to_pptx(input_path: Path) -> tuple[bool, Path | None, str]:
+    """
+    Convert .ppt file to .pptx using LibreOffice.
+
+    Args:
+        input_path: Path to the .ppt file
+
+    Returns:
+        (success, converted_path, message):
+            - success: True if conversion succeeded
+            - converted_path: Path to the converted .pptx file (or None if failed)
+            - message: Status or error message
+    """
+    try:
+        # Check if LibreOffice is installed
+        libreoffice_commands = ['soffice', 'libreoffice']
+        libreoffice_path = None
+
+        for cmd in libreoffice_commands:
+            result = subprocess.run(['which', cmd], capture_output=True, text=True)
+            if result.returncode == 0:
+                libreoffice_path = cmd
+                break
+
+        if not libreoffice_path:
+            return False, None, "LibreOffice 未安裝"
+
+        # Prepare output directory and expected output file path
+        output_dir = input_path.parent
+        base_name = input_path.stem  # filename without extension
+        expected_output = output_dir / f"{base_name}.pptx"
+
+        # Remove existing output file if it exists
+        if expected_output.exists():
+            expected_output.unlink()
+
+        # Run LibreOffice conversion
+        print(f"[INFO] Converting {input_path.name} to .pptx using LibreOffice...")
+        result = subprocess.run([
+            libreoffice_path,
+            '--headless',
+            '--convert-to', 'pptx',
+            '--outdir', str(output_dir),
+            str(input_path)
+        ], capture_output=True, text=True, timeout=120)  # PPT files may be larger, give 120 seconds
+
+        # Check if conversion succeeded
+        if result.returncode == 0 and expected_output.exists():
+            print(f"[SUCCESS] Converted to: {expected_output.name}")
+            return True, expected_output, "轉換成功"
+        else:
+            error_msg = result.stderr or result.stdout or "未知錯誤"
+            print(f"[ERROR] Conversion failed: {error_msg}")
+            return False, None, f"轉換失敗：{error_msg}"
+
+    except subprocess.TimeoutExpired:
+        return False, None, "轉換超時（檔案可能太大或內容複雜）"
     except Exception as e:
         print(f"[ERROR] Exception during conversion: {e}")
         return False, None, f"轉換錯誤：{str(e)}"
@@ -674,6 +740,36 @@ async def handle_document_message(event: MessageEvent, message: FileMessage):
             # Conversion failed
             error_msg = TextSendMessage(
                 text=f"❌ .doc 檔案轉換失敗\n\n{message_convert}\n\n建議：請使用 Microsoft Word 將檔案另存為 .docx 格式後重新上傳。"
+            )
+            await line_bot_api.push_message(reply_target, error_msg)
+
+            # Clean up downloaded file
+            try:
+                file_path.unlink()
+            except Exception as e:
+                print(f"Error deleting file: {e}")
+            return
+
+    # Check if file is .ppt and convert to .pptx
+    elif file_ext == '.ppt':
+        print(f"[INFO] Detected .ppt file, attempting conversion: {file_name}")
+
+        # Notify user about conversion
+        converting_msg = TextSendMessage(text="🔄 偵測到 .ppt 格式，正在自動轉換為 .pptx...\n\n⏳ PPT 檔案較大，轉換可能需要 10-30 秒，請稍候...")
+        await line_bot_api.push_message(reply_target, converting_msg)
+
+        success_convert, converted_path, message_convert = convert_ppt_to_pptx(file_path)
+
+        if success_convert and converted_path:
+            print(f"[SUCCESS] Conversion completed: {converted_path.name}")
+            converted_file_path = converted_path
+            # Update file_name to use .pptx extension
+            file_name = file_name.rsplit('.', 1)[0] + '.pptx'
+            conversion_notice = "\n\n📊 註：檔案已自動從 .ppt 轉換為 .pptx 格式"
+        else:
+            # Conversion failed
+            error_msg = TextSendMessage(
+                text=f"❌ .ppt 檔案轉換失敗\n\n{message_convert}\n\n建議：請使用 Microsoft PowerPoint 將檔案另存為 .pptx 格式後重新上傳。"
             )
             await line_bot_api.push_message(reply_target, error_msg)
 

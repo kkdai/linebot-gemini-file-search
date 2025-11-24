@@ -4,11 +4,12 @@ FROM python:3.10.17
 COPY . /app
 WORKDIR /app
 
-# 安裝系統依賴（LibreOffice for .doc conversion）
+# 安裝系統依賴（LibreOffice for .doc and .ppt conversion）
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     libreoffice \
     libreoffice-writer \
+    libreoffice-impress \
     && rm -rf /var/lib/apt/lists/*
 
 # 安裝 Python 套件

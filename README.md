@@ -17,10 +17,12 @@
 ## ✨ 功能特色
 
 ### 📁 支援多種檔案格式
-- 📄 文件檔案：PDF、Word (DOC/DOCX)、純文字 (TXT) 等
+- 📄 文件檔案：PDF、Word (DOC/DOCX)、PowerPoint (PPT/PPTX)、純文字 (TXT) 等
   - 自動上傳到 File Search Store
   - 支援後續文字查詢
-  - **新功能**：.doc 格式會自動轉換為 .docx
+  - **自動轉換功能**：
+    - .doc 格式自動轉換為 .docx
+    - .ppt 格式自動轉換為 .pptx
 - 🖼️ 圖片檔案：JPG、PNG 等
   - 使用 Gemini 視覺理解能力即時分析
   - 無需上傳，直接回傳分析結果
@@ -99,6 +101,39 @@
 ```
 
 > 💡 **自動轉換功能**：系統使用 LibreOffice 自動將 .doc 轉換為 .docx，無需手動操作！
+
+### 📊 自動轉換 .ppt 簡報檔
+
+```
+👤 你: [上傳季度報告.ppt]
+🤖 Bot: 正在處理您的檔案，請稍候...
+
+🤖 Bot: 🔄 偵測到 .ppt 格式，正在自動轉換為 .pptx...
+
+       ⏳ PPT 檔案較大，轉換可能需要 10-30 秒，請稍候...
+
+🤖 Bot: ✅ 檔案已成功上傳！
+       檔案名稱：季度報告.pptx
+
+       📊 註：檔案已自動從 .ppt 轉換為 .pptx 格式
+
+       現在您可以詢問我關於這個檔案的任何問題。
+
+       [Quick Reply 按鈕]
+       📝 生成檔案摘要 | 📌 重點整理 | 📋 列出檔案
+
+👤 你: 這份簡報的主要內容是什麼？
+🤖 Bot: 這份季度報告簡報包含以下重點：
+       1. 第一季營收達成率 120%
+       2. 新產品市場反應良好
+       3. 下季度策略規劃...
+```
+
+> 💡 **PPT 轉換說明**：
+> - 保留文字、圖片、表格內容
+> - 動畫效果可能遺失
+> - 轉換時間視檔案大小而定（通常 10-30 秒）
+> - PPTX 格式可直接上傳，無需轉換
 
 ### 📋 列出檔案（AI 口語化）
 
@@ -196,9 +231,9 @@ cd linebot-file-search-adk
 pip install -r requirements.txt
 ```
 
-**額外依賴：LibreOffice（用於 .doc 格式轉換）**
+**額外依賴：LibreOffice（用於 .doc 和 .ppt 格式轉換）**
 
-為了支援舊版 .doc 檔案的自動轉換，需要安裝 LibreOffice：
+為了支援舊版 .doc 和 .ppt 檔案的自動轉換，需要安裝 LibreOffice：
 
 ```bash
 # macOS
@@ -206,13 +241,13 @@ brew install --cask libreoffice
 
 # Ubuntu/Debian
 sudo apt-get update
-sudo apt-get install -y libreoffice
+sudo apt-get install -y libreoffice libreoffice-impress
 
 # 驗證安裝
 soffice --version
 ```
 
-> 💡 **注意**：如果未安裝 LibreOffice，.doc 檔案將無法上傳，但其他格式（.docx, .pdf 等）仍可正常使用。
+> 💡 **注意**：如果未安裝 LibreOffice，.doc 和 .ppt 檔案將無法上傳，但其他格式（.docx, .pptx, .pdf 等）仍可正常使用。
 
 ### 4️⃣ 設定環境變數
 
@@ -460,9 +495,11 @@ gcloud logging read "resource.type=cloud_run_revision AND resource.labels.servic
    - AI 會用親切的語氣介紹每個檔案和上傳時間
    - 比傳統清單更友善、更易讀
 6. **支援的檔案類型**：
-   - 文件：PDF、Word (DOC/DOCX)、TXT、Markdown、HTML、CSV、RTF 等
+   - 文件：PDF、Word (DOC/DOCX)、PowerPoint (PPT/PPTX)、TXT、Markdown、HTML、CSV、RTF 等
    - 圖片：JPG、JPEG、PNG、GIF、WebP
-   - **自動轉換**：舊版 .doc 檔案會自動轉換為 .docx 格式
+   - **自動轉換**：
+     - .doc 檔案自動轉換為 .docx（2-5秒）
+     - .ppt 檔案自動轉換為 .pptx（10-30秒）
 
 ## 🤔 常見問題
 
@@ -490,6 +527,15 @@ A: **支援**！系統會自動使用 LibreOffice 將 .doc 轉換為 .docx 格�
 
 **Q: .doc 轉換需要多久時間？**
 A: 通常只需要幾秒鐘。系統會顯示「🔄 偵測到 .doc 格式，正在自動轉換為 .docx...」的訊息。檔案過大時可能需要更長時間（最多 60 秒超時限制）。
+
+**Q: 支援舊版 .ppt 格式嗎？**
+A: **支援**！系統會自動使用 LibreOffice 將 .ppt 轉換為 .pptx 格式再上傳。PPTX 格式可直接上傳無需轉換。轉換過程完全自動化，會保留文字、圖片、表格等內容，但動畫效果可能遺失。
+
+**Q: .ppt 轉換需要多久時間？**
+A: PPT 檔案通常較大，轉換時間約 10-30 秒。系統會顯示「🔄 偵測到 .ppt 格式，正在自動轉換為 .pptx...」並提示預計等待時間。超大檔案（>50MB）或內容複雜時可能需要更長時間（最多 120 秒超時限制）。
+
+**Q: PPT 轉換會保留動畫和特效嗎？**
+A: 文字、圖片、表格等內容會完整保留，但動畫效果、轉場特效、嵌入影片可能會遺失。如果需要完整格式，建議使用 Microsoft PowerPoint 手動將 .ppt 另存為 .pptx 格式後再上傳。
 
 ### 群組使用
 
