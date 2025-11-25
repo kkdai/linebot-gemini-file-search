@@ -20,14 +20,6 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.aiohttp_async_http_client import AiohttpAsyncHttpClient
 from linebot import AsyncLineBotApi, WebhookParser
 
-# LINE Bot SDK v3 imports for loading animation
-try:
-    from linebot.v3.messaging.models import ShowLoadingAnimationRequest
-except ImportError:
-    # Fallback for older SDK versions
-    print("[WARNING] ShowLoadingAnimationRequest not available in this SDK version")
-    ShowLoadingAnimationRequest = None
-
 # Google GenAI imports
 from google import genai
 from google.genai import types
@@ -124,6 +116,7 @@ def get_store_name(event) -> str:
 async def show_loading_animation(chat_id: str, loading_seconds: int = 20):
     """
     Show loading animation to improve UX during long operations.
+    Uses REST API directly to avoid SDK version issues.
 
     Args:
         chat_id: User ID or Group ID (reply target)
@@ -131,21 +124,30 @@ async def show_loading_animation(chat_id: str, loading_seconds: int = 20):
 
     Note: This is a fire-and-forget operation. If it fails, it won't affect the main operation.
     """
-    # Skip if ShowLoadingAnimationRequest is not available
-    if ShowLoadingAnimationRequest is None:
-        print(f"[INFO] Loading animation not available (SDK version)")
-        return
-
     try:
         # Ensure loading_seconds is within valid range (5-60 seconds)
         loading_seconds = max(5, min(60, loading_seconds))
 
-        request = ShowLoadingAnimationRequest(
-            chat_id=chat_id,
-            loading_seconds=loading_seconds
-        )
-        await line_bot_api.show_loading_animation(request)
-        print(f"[INFO] Loading animation started for chat: {chat_id} ({loading_seconds}s)")
+        # Use REST API directly
+        import requests
+        url = "https://api.line.me/v2/bot/chat/loading/start"
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {channel_access_token}'
+        }
+        payload = {
+            'chatId': chat_id,
+            'loadingSeconds': loading_seconds
+        }
+
+        # Fire-and-forget: don't wait for response
+        response = requests.post(url, headers=headers, json=payload, timeout=5)
+
+        if response.status_code == 200:
+            print(f"[INFO] Loading animation started for chat: {chat_id} ({loading_seconds}s)")
+        else:
+            print(f"[WARNING] Loading animation failed: {response.status_code} - {response.text}")
+
     except Exception as e:
         print(f"[WARNING] Failed to show loading animation: {e}")
         # Don't fail the main operation if animation fails
