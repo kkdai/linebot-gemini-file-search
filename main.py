@@ -24,6 +24,9 @@ from linebot import AsyncLineBotApi, WebhookParser
 from google import genai
 from google.genai import types
 
+# Chat Session Manager
+from chat_session_manager import ChatSessionManager
+
 # Configuration
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or ""
 
@@ -75,6 +78,10 @@ if not GOOGLE_API_KEY:
 client = genai.Client(api_key=GOOGLE_API_KEY)
 
 print("GenAI client initialized successfully.")
+
+# Initialize Chat Session Manager
+session_manager = ChatSessionManager(client=client, model_name=MODEL_NAME)
+print("Chat Session Manager initialized successfully.")
 
 # Initialize the FastAPI app for LINEBot
 app = FastAPI()
@@ -532,6 +539,9 @@ async def query_file_search(query: str, store_name: str) -> tuple[str, list]:
     """
     Query the file search store using generate_content.
     Returns (AI response text, list of citations).
+
+    Note: This is the legacy stateless query method.
+    For conversation memory, use query_file_search_with_session() instead.
     """
     try:
         # Get actual store name from cache or by searching
@@ -612,6 +622,100 @@ async def query_file_search(query: str, store_name: str) -> tuple[str, list]:
         # Check if error is related to missing store
         if "not found" in str(e).lower() or "does not exist" in str(e).lower():
             return ("📁 您還沒有上傳任何檔案。\n\n請先傳送文件檔案（PDF、DOCX、TXT 等）給我，上傳完成後就可以開始提問了！\n\n💡 提示：如果您想分析圖片，請直接傳送圖片給我，我會立即為您分析。", [])
+        return (f"查詢時發生錯誤：{str(e)}", [])
+
+
+async def query_file_search_with_session(query: str, user_id: str, store_name: str) -> tuple[str, list]:
+    """
+    Query using ADK Chat Session with conversation memory.
+    Implements Option A: Check if documents exist before enabling File Search.
+
+    Returns (AI response text, list of citations).
+
+    Args:
+        query: User's question
+        user_id: User ID for session management
+        store_name: File search store name (display_name format like "user_xxx")
+    """
+    try:
+        print(f"[INFO] query_file_search_with_session called")
+        print(f"[INFO] user_id: {user_id}, store_name: {store_name}")
+
+        # Step 1: Check if user has uploaded any documents
+        documents = await list_documents_in_store(store_name)
+        print(f"[INFO] Found {len(documents)} documents in store")
+
+        if len(documents) == 0:
+            # No documents - prompt user to upload
+            print(f"[INFO] No documents found, prompting user to upload")
+            return ("📁 您還沒有上傳任何檔案。\n\n請先傳送文件檔案（PDF、DOCX、TXT 等）給我，上傳完成後就可以開始提問了！\n\n💡 提示：如果您想分析圖片，請直接傳送圖片給我，我會立即為您分析。", [])
+
+        # Step 2: Get actual store name (API name, not display name)
+        actual_store_name = None
+        if store_name in store_name_cache:
+            actual_store_name = store_name_cache[store_name]
+            print(f"[INFO] Using cached actual store name: {actual_store_name}")
+        else:
+            # Find store by display_name
+            stores = client.file_search_stores.list()
+            for store in stores:
+                if hasattr(store, 'display_name') and store.display_name == store_name:
+                    actual_store_name = store.name
+                    store_name_cache[store_name] = actual_store_name
+                    print(f"[INFO] Found actual store name: {actual_store_name}")
+                    break
+
+        if not actual_store_name:
+            print(f"[ERROR] Could not find actual store name for: {store_name}")
+            return ("系統錯誤：無法找到文件庫。", [])
+
+        # Step 3: Get or create chat session with File Search enabled
+        print(f"[INFO] Getting or creating session with File Search enabled")
+        chat = session_manager.get_or_create_session(
+            user_id=user_id,
+            store_name=actual_store_name,
+            enable_file_search=True
+        )
+
+        # Step 4: Send message through chat session
+        print(f"[INFO] Sending message to chat session")
+        response = chat.send_message(query)
+
+        # Step 5: Extract citations (similar to stateless method)
+        citations = []
+        try:
+            if hasattr(response, 'candidates') and response.candidates:
+                candidate = response.candidates[0]
+                if hasattr(candidate, 'grounding_metadata') and candidate.grounding_metadata:
+                    grounding_chunks = candidate.grounding_metadata.grounding_chunks
+                    for chunk in grounding_chunks:
+                        if hasattr(chunk, 'web') and chunk.web:
+                            citations.append({
+                                'type': 'web',
+                                'title': getattr(chunk.web, 'title', 'Unknown'),
+                                'uri': getattr(chunk.web, 'uri', ''),
+                            })
+                        elif hasattr(chunk, 'retrieved_context') and chunk.retrieved_context:
+                            citations.append({
+                                'type': 'file',
+                                'title': getattr(chunk.retrieved_context, 'title', 'Unknown'),
+                                'text': getattr(chunk.retrieved_context, 'text', '')[:500],
+                            })
+            print(f"[INFO] Found {len(citations)} citations")
+        except Exception as citation_error:
+            print(f"[ERROR] Error extracting citations: {citation_error}")
+
+        # Step 6: Return response
+        if response.text:
+            print(f"[INFO] Successfully generated response with session")
+            return (response.text, citations)
+        else:
+            return ("抱歉，我無法從文件中找到相關資訊。", [])
+
+    except Exception as e:
+        print(f"[ERROR] Error in query_file_search_with_session: {e}")
+        import traceback
+        traceback.print_exc()
         return (f"查詢時發生錯誤：{str(e)}", [])
 
 
@@ -1159,6 +1263,7 @@ async def handle_text_message(event: MessageEvent, message, bot_user_id: str = '
     """
     Handle text messages - query the file search store or list files.
     Only responds in groups if bot is mentioned.
+    Now uses ADK Chat Session for conversation memory.
 
     Args:
         event: MessageEvent from LINE webhook
@@ -1172,8 +1277,21 @@ async def handle_text_message(event: MessageEvent, message, bot_user_id: str = '
 
     store_name = get_store_name(event)
     query = message.text
+    user_id = event.source.user_id
 
-    print(f"Received query: {query} for store: {store_name}")
+    print(f"Received query: {query} for store: {store_name}, user: {user_id}")
+
+    # Check if user wants to clear conversation
+    clear_keywords = ['清除對話', '清除对话', 'reset', 'clear', '重置對話', '重置对话', '清空對話', '清空对话']
+    if any(keyword in query.lower() for keyword in clear_keywords):
+        print(f"[INFO] Clear session command detected")
+        success = session_manager.clear_session(user_id)
+        if success:
+            reply_msg = TextSendMessage(text="✅ 對話記憶已清除。\n\n我們可以重新開始對話了！")
+        else:
+            reply_msg = TextSendMessage(text="✅ 對話記憶已清除。\n\n（您目前沒有進行中的對話）")
+        await line_bot_api.reply_message(event.reply_token, reply_msg)
+        return
 
     # Note: Citation viewing is now handled by Postback actions
     # The Quick Reply buttons trigger postback events instead of text messages
@@ -1188,8 +1306,9 @@ async def handle_text_message(event: MessageEvent, message, bot_user_id: str = '
         await send_files_carousel(event, documents, page=1, store_name=store_name)
         return
 
-    # Otherwise, query file search
-    response_text, citations = await query_file_search(query, store_name)
+    # Query file search with session (ADK Chat Session with conversation memory)
+    print(f"[INFO] Using query_file_search_with_session")
+    response_text, citations = await query_file_search_with_session(query, user_id, store_name)
 
     # Store citations in cache (limit to 3 for Quick Reply)
     if citations:
